@@ -1417,14 +1417,46 @@ def einsum(*operands, out=None, optimize=False, **kwargs):
     ...     _ = np.einsum('ijk,ilm,njm,nlk,abc->',a,a,a,a,a, optimize=path)
 
     """
+    # Save eventual reshape notation 
+    final_reshape = False
+    if isinstance(operands[0], str):  # e.g. '...->abc(def)g(hi)
+        orig_string = operands[0].split('->')[1] if '->' in operands[0] else ""
+        final_reshape = "(" in orig_string
+        operands = (operands[0].replace("(", "").replace(")", ""),) + operands[1:]
+    
     # Special handling if out is specified
     specified_out = out is not None
+    if specified_out and final_reshape:
+        raise ValueError("If an output array is specified, the output string cannot contain reshape notation")
+
+    def reshape_if_needed(array):
+        "reshapes the array according to the reshape notation in orig_string"
+        if final_reshape:
+            shape = ()
+            array_shape = list(array.shape)
+            inside = False
+            for c in orig_string:
+                if c == "(":
+                    inside = True
+                    inside_shape = 1
+                    continue
+                elif c == ")":
+                    inside = False
+                    shape += (inside_shape,)
+                    continue
+                if inside:
+                    inside_shape *= array_shape.pop(0)
+                else:
+                    shape += (array_shape.pop(0),)
+            return array.reshape(shape)
+        else:
+            return array
 
     # If no optimization, run pure einsum
     if optimize is False:
         if specified_out:
             kwargs['out'] = out
-        return c_einsum(*operands, **kwargs)
+        return reshape_if_needed(c_einsum(*operands, **kwargs))
 
     # Check the kwargs to avoid a more cryptic error later, without having to
     # repeat default values here
@@ -1500,4 +1532,4 @@ def einsum(*operands, out=None, optimize=False, **kwargs):
     if specified_out:
         return out
     else:
-        return asanyarray(operands[0], order=output_order)
+        return asanyarray(reshape_if_needed(operands[0]), order=output_order)
